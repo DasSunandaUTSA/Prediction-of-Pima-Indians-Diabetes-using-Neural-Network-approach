@@ -1,0 +1,205 @@
+---
+title: "Project 1"
+author: "Sunanda Das"
+date: '2022-04-07'
+output: word_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Importing packages
+```{r}
+library(tidyverse) # metapackage of all tidyverse packages
+library(ggcorrplot)
+library(rsample)
+```
+
+#Reading in files
+```{r}
+df = read_csv("C:/Users/sdas/Desktop/Spring 2022/STA 6933/Project 1/diabetes.csv" , show_col_types = FALSE)
+```
+
+# Inspect the data
+```{r}
+colnames(df)[9] <- "Diabetes" #rename output as diabetes
+colnames(df)[7] <- "Ped"  #rename DiabetesPedigreeFunction as Ped
+colnames(df)[3] <- "BP"  #rename BloodPressure as BP
+head(df,5)
+```
+
+```{r}
+r <- cor(df, use="complete.obs")
+round(r,2)
+ggcorrplot(r, 
+           hc.order = TRUE, 
+           type = "lower",
+           lab = TRUE)
+```
+Seems as if the highest correlation to our response variable is glucose with a correlation of 0.47. No strong correlation observed between variables. So, no need to drop any of them for analysis.
+
+
+#Missing values
+```{r}
+# Treat 0 in the biological variables other than number of times pregnant as missing values 
+cols_change <- colnames(df)[!colnames(df) %in% c("Pregnancies","Age","Ped", "Diabetes")]
+data <- df[cols_change] == 0
+df[cols_change][data] <- NA
+
+# Show the number of missing values of each column
+print(apply(data, 2, sum))
+```
+
+#Data Split
+
+```{r}
+# Set a random seed
+set.seed(123)
+# Split the dataset: 75% for trainging and 25% for testing
+
+traindata <- sample(nrow(df), round(0.75*nrow(df)), replace = FALSE)
+train <- df[traindata,]
+test <- df[-(traindata),]
+train$Diabetes<-as.numeric(train$Diabetes)
+test$Diabetes<-as.numeric(test$Diabetes)
+```
+
+
+```{r}
+prop.table(table(train$Diabetes))
+```
+```{r}
+prop.table(table(test$Diabetes))
+```
+#Missing Data Imputation
+
+Because of the small size of the dataset, I want to obtain as much as information from it, so I will not delete either entire observations (rows) or variables (columns) containing missing values right now.
+Two options:
+    Replacing missing data with sensible values (mean or median) given the distribution of the data.
+    Replacing missing data with prediction (Mutiple Imputaion).
+
+I’ll use 1st (median) on the small number of missing values and 2nd (Mutiple Imputaion) on the large number of missing values.
+
+```{r}
+# Median value imputation
+train$Glucose[is.na(train$Glucose)] <- median(train$Glucose,na.rm = T)
+train$BP[is.na(train$BP)] <- median(train$BP,na.rm = T)
+train$BMI[is.na(train$BMI)] <- median(train$BMI,na.rm = T)
+
+# Multiple imputation
+library(mice)
+mice_mod <- mice(train[, c("SkinThickness","Insulin")], method='rf') 
+```
+
+
+```{r}
+# Save the complete imputation output 
+mice_complete <- complete(mice_mod)
+
+# Show distributions for skinThickness and Insulin
+par(mfrow=c(2,2))
+hist(train$SkinThickness, freq=F, main='Triceps skin fold thickness : Original Data',
+     col='darkgreen', ylim=c(0,0.04))
+hist(mice_complete$SkinThickness, freq=F, main='Triceps skin fold thickness : MICE Output',
+     col='lightgreen', ylim=c(0,0.04))
+hist(train$Insulin, freq=F, main='2-Hour serum insulin: Original Data',
+     col='darkblue', ylim=c(0,0.004))
+hist(mice_complete$Insulin, freq=F, main='2-Hour serum insulin: MICE Output',
+     col='lightblue', ylim=c(0,0.004))
+```
+Compared with the original distributions, the two complete distributions above for tsk thickness and serum are not significant changed, which is good.
+
+```{r}
+# Replace skinThickness and Insulin variables from the mice
+train$SkinThickness <- mice_complete$SkinThickness
+train$Insulin <- mice_complete$Insulin
+
+# Make sure there is no missing data
+sum(is.na(train))
+```
+#build models
+
+#Data Normalization
+
+One of the most important procedures when forming a neural network is data normalization. This involves adjusting the data to a common scale so as to accurately compare predicted and actual values. Failure to normalize the data will typically result in the prediction value remaining the same across all observations, regardless of the input values.
+
+We can do this in two ways in R:
+
+    Scale the data frame automatically using the scale function in R
+    Transform the data using a max-min normalization technique
+
+    
+```{r}
+# Normalize training data, Scaled Normalization
+scale_training <- as.data.frame(scale(train[,-9],  
+                                      center = TRUE, scale = TRUE))
+scale_training$Diabetes<-as.numeric(train$Diabetes)
+str(scale_training)
+```
+#Neural Network
+
+```{r}
+library("neuralnet")
+scale_training$Diabetes <- as.factor(ifelse(scale_training$Diabetes==0, "non-diabetic", "Diabetic")) #recode Diabetes
+NN = neuralnet(Diabetes ~ ., scale_training, hidden = 2 , linear.output = TRUE, act.fct="logistic", rep=1)
+plot(NN)
+```
+
+```{r}
+library(ggplot2)
+library(cvms)
+library(tibble)
+predict <- neuralnet::compute(NN, scale_training[,1:8])
+Prediction <- round(predict$net.result[,1])
+Actual <- train$Diabetes
+cm<-table(Actual,Prediction)
+cfm <- as_tibble(cm)
+plot_confusion_matrix(cfm, 
+                      target_col = "Actual", 
+                      prediction_col = "Prediction",
+                      counts_col = "n")
+```
+#testing accuracy of model
+```{r}
+library(caret)
+confusionMatrix(cm)
+```
+```{r}
+library(pROC)
+rocTest_nn <- roc(train$Diabetes, as.numeric(Prediction))
+plot(rocTest_nn, print.auc = T)
+```
+
+#TEST DATASET:
+
+```{r}
+# Normalize testing data, Scaled Normalization
+scale_test <- as.data.frame(scale(test[,-9],  
+                                      center = TRUE, scale = TRUE))
+scale_test$Diabetes<-as.numeric(test$Diabetes)
+str(scale_test)
+```
+
+```{r}
+predicttest <- neuralnet::compute(NN, scale_test[,1:8])
+Prediction_test <- round(predicttest$net.result[,1])
+Target <- test$Diabetes
+cm2<-table(Target,Prediction_test)
+cfm2 <- as_tibble(cm2)
+plot_confusion_matrix(cfm2, 
+                      target_col = "Target", 
+                      prediction_col = "Prediction_test",
+                      counts_col = "n")
+```
+#testing accuracy of model
+```{r}
+confusionMatrix(cm2)
+```
+```{r}
+rocTest<- roc(test$Diabetes, as.numeric(Prediction_test))
+plot(rocTest, print.auc = T)
+```
+
+
+
