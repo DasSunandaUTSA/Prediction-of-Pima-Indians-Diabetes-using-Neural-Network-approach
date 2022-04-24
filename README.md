@@ -1,1 +1,0 @@
-# Prediction-of-Pima-Indians-Diabetes-using-Neural-Network-approach
